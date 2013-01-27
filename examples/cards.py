@@ -24,12 +24,12 @@ def check_hands(model, rand):
     hands = [deck[0:7], deck[7:14], deck[14:21], deck[21:28]]
     return len([True for hand in hands if two_face(hand)]) >= 2
 
-def process_results(model, result):
+def process_result(model, result):
     if result:
         model.successes += 1
 
 model.trial = check_hands
-model.process_result = process_results
+model.process_result = process_result
 model.ntrials = 1000
 model.successes = 0
 model.simulate()
