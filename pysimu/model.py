@@ -1,6 +1,8 @@
 from random import Random
 import types
 from multiprocessing import Process, Pipe
+import time
+import logging
 
 class Model(object):
     """
@@ -28,12 +30,32 @@ class Model(object):
         self.ntrials = kwds.pop("ntrials", None)
         self.trial = kwds.pop("trial", self.trial)
         self.seed = kwds.pop("seed", None)
+        self.debug = kwds.pop("debug", False)
 
         if len(kwds) > 0:
             msg = "Unknown keyword arguments: %s" % str(kwds.keys())[1:-1]
             raise TypeError(msg)
 
         self.use_multiprocessing = True
+
+        self._setup_logging()
+
+    def _setup_logging(self):
+        """
+        Configure self.logger for logging
+
+        """
+
+        self.logger = logging.getLogger(__name__)
+
+        fmtstr = "[%%(levelname)s] %s: %%(message)s" % __name__
+        console_handler = logging.StreamHandler()
+        console_handler.setFormatter(logging.Formatter(fmt=fmtstr))
+        self.logger.addHandler(console_handler)
+        if self.debug:
+            self.logger.setLevel(logging.DEBUG)
+        else:
+            self.logger.setLevel(logging.WARNING)
 
     def simulate(self):
         if self.ntrials is None:
@@ -42,6 +64,9 @@ class Model(object):
         if self.trial is None:
             msg = "Model attribute 'trial' must be specified"
             raise ValueError(msg)
+
+        self.logger.info("starting simulations")
+        t1 = time.time()
 
         self.results = []
 
@@ -69,6 +94,9 @@ class Model(object):
                 result = self.trial(rand)
                 self.process_result(result)
                 self.results.append(result)
+
+        t2 = time.time()
+        self.logger.info("simulations took %.3fs" % (t2 - t1))
 
     def dispatch(self, conn, rand):
         """
