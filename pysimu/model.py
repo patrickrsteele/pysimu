@@ -1,5 +1,6 @@
 from random import Random
 import types
+from multiprocessing import Process, Pipe
 
 class Model(object):
     """
@@ -32,6 +33,8 @@ class Model(object):
             msg = "Unknown keyword arguments: %s" % str(kwds.keys())[1:-1]
             raise TypeError(msg)
 
+        self.use_multiprocessing = True
+
     def simulate(self):
         if self.ntrials is None:
             msg = "Model attribute 'ntrials' must be specified"
@@ -41,15 +44,44 @@ class Model(object):
             raise ValueError(msg)
 
         self.results = []
-        
-        for n in xrange(0, self.ntrials):
-            rand = Random()
-            rand.seed(self.seed)
-            rand.jumpahead(n)
 
-            result = self.trial(rand)
-            self.process_result(result)
-            self.results.append(result)
+        if self.use_multiprocessing:
+            for n in xrange(0, self.ntrials):
+                # Generate a new random number generator
+                rand = Random()
+                rand.seed(self.seed)
+                rand.jumpahead(n)
+
+                # Create a new process
+                (parent_conn, child_conn) = Pipe()
+                proc = Process(target=self.dispatch, args=(child_conn, rand))
+                proc.start()
+                result = parent_conn.recv()
+                proc.join()
+                self.process_result(result)
+                self.results.append(result)
+
+        else:
+            for n in xrange(0, self.ntrials):
+                rand = Random()
+                rand.seed(self.seed)
+                rand.jumpahead(n)
+                result = self.trial(rand)
+                self.process_result(result)
+                self.results.append(result)
+
+    def dispatch(self, conn, rand):
+        """
+        Dispatch a child process to run self.trial using the provided
+        instance of random.Random, rand. Communicate results with the
+        pipe conn.
+
+        """
+
+        result = self.trial(rand)
+        conn.send(result)
+        conn.close()
+
 
     def trial(self, rand):
         """
