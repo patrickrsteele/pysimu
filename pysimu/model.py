@@ -1,8 +1,10 @@
 from random import Random
 import types
-from multiprocessing import Process, Pipe
+import multiprocessing
 import time
 import logging
+
+from pysimu.server import server
 
 class Model(object):
     """
@@ -31,12 +33,11 @@ class Model(object):
         self.trial = kwds.pop("trial", self.trial)
         self.seed = kwds.pop("seed", None)
         self.debug = kwds.pop("debug", False)
-
+        self.multiprocess = kwds.pop("multiprocess", False)
+        
         if len(kwds) > 0:
             msg = "Unknown keyword arguments: %s" % str(kwds.keys())[1:-1]
             raise TypeError(msg)
-
-        self.use_multiprocessing = True
 
         self._setup_logging()
 
@@ -53,7 +54,7 @@ class Model(object):
         console_handler.setFormatter(logging.Formatter(fmt=fmtstr))
         self.logger.addHandler(console_handler)
         if self.debug:
-            self.logger.setLevel(logging.DEBUG)
+            self.logger.setLevel(logging.INFO)
         else:
             self.logger.setLevel(logging.WARNING)
 
@@ -65,28 +66,64 @@ class Model(object):
             msg = "Model attribute 'trial' must be specified"
             raise ValueError(msg)
 
-        self.logger.info("starting simulations")
         t1 = time.time()
-
         self.results = []
+        if self.multiprocess:
+            self.logger.info("starting simulations: multiprocessing")
 
-        if self.use_multiprocessing:
-            for n in xrange(0, self.ntrials):
-                # Generate a new random number generator
-                rand = Random()
-                rand.seed(self.seed)
-                rand.jumpahead(n)
+            ncpus = multiprocessing.cpu_count()
 
-                # Create a new process
-                (parent_conn, child_conn) = Pipe()
-                proc = Process(target=self.dispatch, args=(child_conn, rand))
+            # Create and start each Server
+            server_processes = []
+            server_connections = []
+            for n in xrange(0, ncpus):
+                (parent_conn, child_conn) = multiprocessing.Pipe()
+                proc = multiprocessing.Process(target=server,
+                                               args=(self.trial, parent_conn, child_conn))
                 proc.start()
-                result = parent_conn.recv()
+                server_processes.append(proc)
+                server_connections.append(parent_conn)
+                child_conn.close() # We don't use this end
+
+            # Send initial data to each Server
+            n = 0
+            for conn in server_connections:
+                if n < self.ntrials:
+                    self.logger.debug("dispatching %i" % n)
+                    conn.send((n, self._get_rand(n),))
+                    n += 1
+                else:
+                    break
+
+            # Dispatch all trials
+            finished = []
+            while True:
+                for conn in server_connections:
+                    if conn.poll():
+                        result = conn.recv()
+                        self.process_result(result)
+                        self.results.append(result)
+
+                        # Dispatch the next trial, or mark the connection for closure
+                        if n < self.ntrials:
+                            self.logger.debug("dispatching %i" % n)
+                            conn.send((n, self._get_rand(n),))
+                            n += 1
+                        else:
+                            finished.append(conn)
+
+                if n == self.ntrials and len(finished) == ncpus:
+                    break
+
+            # Cleanup servers
+            self.logger.debug("dispatching done, cleaning up")
+            for conn in server_connections:
+                conn.close()
+            for proc in server_processes:
                 proc.join()
-                self.process_result(result)
-                self.results.append(result)
 
         else:
+            self.logger.info("starting simulations: sequential")
             for n in xrange(0, self.ntrials):
                 rand = Random()
                 rand.seed(self.seed)
@@ -97,6 +134,18 @@ class Model(object):
 
         t2 = time.time()
         self.logger.info("simulations took %.3fs" % (t2 - t1))
+
+    def _get_rand(self, n):
+        """
+        Return the nth offset of the random number generator seeded by
+        self.seed.
+
+        """
+
+        rand = Random()
+        rand.seed(self.seed)
+        rand.jumpahead(n)
+        return rand
 
     def dispatch(self, conn, rand):
         """

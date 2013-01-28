@@ -9,6 +9,7 @@ from a standard 52-card deck.
 """
 
 model = Model("queue", debug=True)
+model.seed = 0
 
 def two_face(hand):
     return len([card for card in hand if card % 13 >= 10]) >= 2
@@ -30,8 +31,9 @@ def process_result(model, result):
 
 model.trial = check_hands
 model.process_result = process_result
-model.ntrials = 100
+model.ntrials = 1000
 model.successes = 0
+model.multiprocess = True
 model.simulate()
 
 print model.successes / model.ntrials
